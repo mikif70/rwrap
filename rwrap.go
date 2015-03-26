@@ -3,15 +3,16 @@
 package main
 
 import (
-	"bufio"
+	// "bufio"
 	//	"errors"
-	"bytes"
+	// "bytes"
 	"flag"
 	"fmt"
-	//	"io"
+	//"io"
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,14 +21,14 @@ type Config struct {
 	ssdbUrl  string
 	wrapAddr *net.TCPAddr
 	ssdbAddr *net.TCPAddr
+	ssdbConn *net.TCPConn
 }
 
 type Conn struct {
-	conn      net.Conn
-	bufRead   *bufio.Reader
-	bufWrite  *bufio.Writer
-	wrapRead  *bufio.Reader
-	wrapWrite *bufio.Writer
+	conn  net.Conn
+	ssdb  net.Conn
+	cmds  []interface{}
+	reply []string
 }
 
 var (
@@ -37,120 +38,144 @@ var (
 	}
 )
 
-func parseInt(data []byte) int {
-	//	fmt.Println(string(data))
-	num, err := strconv.Atoi(string(data))
-	if err != nil {
-		fmt.Println("Conversion error: ", err.Error())
-		return 0
-	}
-	return num
-}
-
-func myScanLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		fmt.Println("EOF")
-		return 0, nil, nil
-	}
-	if i := bytes.IndexByte(data, '\n'); i >= 0 {
-		// We have a full newline-terminated line.
-		fmt.Println("Line: ", i+1, string(data[:i+1]))
-		return i + 1, data[:i+1], nil
-	}
-	// If we're at EOF, we have a final, non-terminated line. Return it.
-	if atEOF {
-		fmt.Println("EOF with data")
-		return len(data), data, nil
-	}
-	// Request more data.
-	fmt.Println("more data")
-	return 0, nil, nil
-}
-
-func parser(buf *bufio.Reader) ([]byte, error) {
-	scan := bufio.NewScanner(buf)
-	scan.Split(myScanLines)
-	num := 0
-	lines := make([][]byte, 0)
-	retval := make([][]byte, 0)
-	cmdLine := true
-	cmd := ""
-	loop := true
-	multi := false
-	for loop {
-		fmt.Printf("New Loop: loop: %v - multi: %v - cmd: %s - cmdLine: %v - num: %d\n", loop, multi, cmd, cmdLine, num)
-		if scan.Scan() {
-			switch scan.Bytes()[0] {
-			case ':':
-			case '+':
-			case '-':
+func (c *Conn) parser(lines []string) int {
+	//	fmt.Println("Lines: ", lines)
+	ind := 0
+	remove := false
+	switch lines[ind][0] {
+	case '*':
+		//		fmt.Println("*: ", string(lines[ind]))
+		num, _ := strconv.Atoi(string(lines[ind][1:]))
+		cmd := make([]string, 0)
+		cmd = append(cmd, string(lines[ind]))
+		for n := 1; n <= num*2; n++ {
+			switch lines[ind+n][0] {
 			case '$':
-				if num == 0 {
-					num = 1
-					cmdLine = false
-				}
-			case '*':
-				ln := len(scan.Bytes())
-				num = parseInt(scan.Bytes()[1:ln-2]) * 2
-				cmdLine = true
+				cmd = append(cmd, lines[ind+n])
 			default:
-				if cmdLine {
-					ln := len(scan.Bytes())
-					cmd = string(scan.Bytes()[:ln-2])
-					cmdLine = false
+				if lines[ind+n] == "MULTI" || lines[ind+n] == "EXEC" {
+					remove = true
 				}
+				cmd = append(cmd, lines[ind+n])
 			}
-
-			lines = append(lines, scan.Bytes())
-			if num == 0 {
-				if cmd == "MULTI" {
-					multi = true
-				} else if cmd == "EXEC" {
-					loop = false
-				} else {
-					retval = append(retval, bytes.Join(lines, []byte("")))
-					if !multi {
-						loop = false
-					}
-				}
-				lines = make([][]byte, 0)
-			} else {
-				num--
-			}
-		} else {
-			loop = false
+			//			fmt.Println("For: ", ind, n, string(lines[ind+n]))
 		}
+		ind += num * 2
+		if !remove {
+			c.cmds = append(c.cmds, cmd)
+		}
+	default:
+		fmt.Println("Malformed cmd")
 	}
 
-	if err := scan.Err(); err != nil {
-		fmt.Fprintln(os.Stderr, "reading buffer: ", err)
-		return nil, err
-	}
+	//	fmt.Println("return ind: ", ind+1)
 
-	return bytes.Join(retval, []byte("")), nil
+	return ind + 1
 }
 
-func (c *Conn) wrapCmd() error {
+func (c *Conn) parseCmd(buf string) error {
+
+	//	cmds := make([]string, 0)
+
+	lines := strings.Split(buf, "\r\n")
+
+	lines = lines[:len(lines)-1]
+	llen := len(lines)
 
 	loop := true
-
+	ind := 0
 	for loop {
-		ret, err := parser(c.bufRead)
-		if err != nil {
+		//		fmt.Println("ind: ", ind, llen)
+		ind += c.parser(lines[ind:])
+		if ind >= llen-1 {
 			loop = false
-			continue
 		}
-		fmt.Println("Writing: ", ret)
-		num, err := c.wrapWrite.Write(ret)
-		fmt.Println("Written: ", num, err)
-		c.wrapWrite.Flush()
-		ret, _ = parser(c.wrapRead)
-		fmt.Println("Recv: ", string(ret))
-		num, err = c.bufWrite.Write(ret)
-		c.bufWrite.Flush()
 	}
+
+	fmt.Printf("Cmds: %v\n", c.cmds)
 
 	return nil
+}
+
+func (c *Conn) wrapCmd() {
+
+	fmt.Println("Reading buf: ")
+
+	buf := make([]byte, 512)
+
+	n, err := c.conn.Read(buf)
+	if err != nil {
+		fmt.Println("Read error: ", err.Error())
+		return
+	}
+
+	//	fmt.Println("Read: ", n, buf[:n])
+
+	c.parseCmd(string(buf[:n]))
+
+	resp := make([]byte, 128)
+	for i, el := range c.cmds {
+		fmt.Printf("cmd: %d -> %+v\n", i, el)
+		buf := []byte(strings.Join(el.([]string), "\r\n") + "\r\n")
+		r, err := c.ssdb.Write(buf)
+		if err != nil {
+			fmt.Println("Write error: ", err.Error())
+			return
+		}
+		fmt.Println("Write: ", r, err, len(buf))
+		l, err := c.ssdb.Read(resp)
+		if err != nil {
+			fmt.Println("Response error: ", err.Error())
+			return
+		}
+		c.reply = append(c.reply, string(resp[:l]))
+	}
+
+	retbuf := []byte(strings.Join(c.reply, "\r\n"))
+	r, err := c.conn.Write(retbuf)
+	if err != nil {
+		fmt.Println("Write reply error: ", err.Error())
+		return
+	}
+	fmt.Println("Write reply: ", r, err, len(retbuf), string(retbuf))
+
+}
+
+func manageConnection(conn *net.TCPConn) {
+
+	fmt.Println("Manage conn: ", conn)
+	defer conn.Close()
+
+	c := &Conn{
+		conn: conn,
+		ssdb: config.ssdbConn,
+	}
+
+	start := time.Now()
+	c.wrapCmd()
+	fmt.Println("wrapCmd: ", time.Since(start))
+}
+
+func listen() *net.TCPListener {
+	fmt.Printf("Listen: %+v\n", config.wrapAddr)
+	ln, err := net.ListenTCP("tcp", config.wrapAddr)
+	if err != nil {
+		fmt.Println("Listen err: ", err.Error())
+		os.Exit(-1)
+	}
+
+	return ln
+}
+
+func ssdbConnect() *net.TCPConn {
+	ssdb, err := net.DialTCP("tcp", nil, config.ssdbAddr)
+	if err != nil {
+		fmt.Println("Dial err: ", err.Error())
+		os.Exit(-2)
+	}
+
+	config.ssdbConn = ssdb
+	return ssdb
 }
 
 func init() {
@@ -166,26 +191,10 @@ func main() {
 
 	fmt.Println(config)
 
-	fmt.Printf("Listen: %+v\n", config.wrapAddr)
-	ln, err := net.ListenTCP("tcp", config.wrapAddr)
-	if err != nil {
-		fmt.Println("Listen err: ", err.Error())
-		return
-	}
+	ln := listen()
 	defer ln.Close()
 
-	file, err := os.Create("dovecot-redis.log")
-	if err != nil {
-		fmt.Println("File err: ", err.Error())
-		return
-	}
-	defer file.Close()
-
-	ssdb, err := net.DialTCP("tcp", nil, config.ssdbAddr)
-	if err != nil {
-		fmt.Println("Dial err: ", err.Error())
-		return
-	}
+	ssdb := ssdbConnect()
 	defer ssdb.Close()
 
 	for {
@@ -195,25 +204,6 @@ func main() {
 			continue
 		}
 
-		go func() {
-			conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-			defer conn.Close()
-
-			c := &Conn{
-				conn:      conn,
-				bufRead:   bufio.NewReader(conn),
-				bufWrite:  bufio.NewWriter(conn),
-				wrapRead:  bufio.NewReader(ssdb),
-				wrapWrite: bufio.NewWriter(ssdb),
-			}
-
-			start := time.Now()
-			err := c.wrapCmd()
-			fmt.Println("wrapCmd: ", time.Since(start))
-
-			if err != nil {
-				fmt.Println(err)
-			}
-		}()
+		go manageConnection(conn)
 	}
 }
