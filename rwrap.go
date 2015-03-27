@@ -121,6 +121,7 @@ func (c *Conn) parseCmd(buf string) error {
 func (c *Conn) writeCmd(buf string) (string, error) {
 	resp := make([]byte, 256)
 
+	//	fmt.Printf("Write: %+v\n", buf)
 	_, err := c.ssdb.Write([]byte(buf))
 	if err != nil {
 		fmt.Println("Write error: ", err.Error())
@@ -133,6 +134,7 @@ func (c *Conn) writeCmd(buf string) (string, error) {
 		return "", err
 	}
 
+	//	fmt.Printf("Resp: %+v\n", string(resp[:l]))
 	return string(resp[:l]), nil
 }
 
@@ -184,9 +186,9 @@ func (c *Conn) wrapCmd(buf string) error {
 
 	c.parseCmd(buf)
 
-	if len(c.cmds) > 0 {
-		//		fmt.Println("Cmds: ", c.cmds)
-	}
+	//	if len(c.cmds) > 0 {
+	fmt.Println("Cmds: ", c.cmds)
+	//	}
 
 	err := c.sendCmd()
 	if err != nil {
@@ -233,6 +235,8 @@ func manageConnection(conn *net.TCPConn) {
 			fmt.Println("Read error: ", err.Error())
 			break
 		}
+
+		//		fmt.Printf("Buffer: %+v\n", string(buf[:n]))
 		err = c.wrapCmd(string(buf[:n]))
 		if err != nil {
 			break

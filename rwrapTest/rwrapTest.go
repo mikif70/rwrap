@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"strconv"
 )
 
 type Config struct {
@@ -49,28 +50,31 @@ func main() {
 
 	var msg []string
 
+	len1 := "$" + strconv.Itoa(len(config.user)+14)
+	len2 := "$" + strconv.Itoa(len(config.user)+15)
+
 	switch config.cmd {
 	case "get":
 		msg = []string{
-			"*2" + NL + "$3" + NL + "GET" + NL + "$32" + NL + config.user + "/quota/storage" + NL,
-			"*2" + NL + "$3" + NL + "GET" + NL + "$33" + NL + config.user + "/quota/messages" + NL,
+			"*2" + NL + "$3" + NL + "GET" + NL + len1 + NL + config.user + "/quota/storage" + NL,
+			"*2" + NL + "$3" + NL + "GET" + NL + len2 + NL + config.user + "/quota/messages" + NL,
 		}
 	case "recalc":
 		msg = []string{
-			"*1" + NL + "$5" + NL + "MULTI" + NL + "*2" + NL + "$3" + NL + "DEL" + NL + "$32" + NL +
-				config.user + "/quota/storage" + NL + "*2" + NL + "$3" + NL + "DEL" + NL + "$33" + NL +
-				config.user + "/quota/messages" + NL + "*3" + NL + "$3" + NL + "SET" + NL + "$32" + NL +
+			"*1" + NL + "$5" + NL + "MULTI" + NL + "*2" + NL + "$3" + NL + "DEL" + NL + len1 + NL +
+				config.user + "/quota/storage" + NL + "*2" + NL + "$3" + NL + "DEL" + NL + len2 + NL +
+				config.user + "/quota/messages" + NL + "*3" + NL + "$3" + NL + "SET" + NL + len1 + NL +
 				config.user + "/quota/storage" + NL + "$9" + NL + "190544684" + NL + "*3" + NL + "$3" + NL +
-				"SET" + NL + "$33" + NL + config.user + "/quota/messages" + NL + "$4" + NL + "2963" + NL +
+				"SET" + NL + len2 + NL + config.user + "/quota/messages" + NL + "$4" + NL + "2963" + NL +
 				"*1" + NL + "$4" + NL + "EXEC" + NL,
 		}
 	default:
 		msg = []string{
 			"*1" + NL + "$5" + NL + "MULTI" + NL + "*3" + NL + "$6" +
-				NL + "INCRBY" + NL + "$32" + NL + config.user + "/quota/storage" +
-				NL + "$5" + NL + "-1622" + NL + "*3" + NL + "$6" + NL + "INCRBY" + NL + "$33" +
+				NL + "INCRBY" + NL + len1 + NL + config.user + "/quota/storage" +
+				NL + "$5" + NL + "-1622" + NL + "*3" + NL + "$6" + NL + "INCRBY" + NL + len2 +
 				NL + config.user + "/quota/messages" + NL + "$2" + NL + "-2" + NL + "*1" +
-				NL + "$4" + NL + "EXEC" + NL + "*2" + NL + "$3" + NL + "GET" + NL + "$32" +
+				NL + "$4" + NL + "EXEC" + NL + "*2" + NL + "$3" + NL + "GET" + NL + len1 +
 				NL + config.user + "/quota/storage" + NL,
 		}
 	}
