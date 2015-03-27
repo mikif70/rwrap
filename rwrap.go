@@ -27,8 +27,19 @@ type Config struct {
 type Conn struct {
 	conn  net.Conn
 	ssdb  net.Conn
-	cmds  []interface{}
+	cmds  []Cmds
+	multi []bool
 	reply []string
+	count int
+}
+
+type Cmd struct {
+	length byte
+	cmd    string
+}
+
+type Cmds struct {
+	cmds []Cmd
 }
 
 var (
@@ -41,7 +52,7 @@ var (
 func (c *Conn) parser(lines []string) int {
 	//	fmt.Println("Lines: ", lines)
 	ind := 0
-	remove := false
+	multi := false
 	switch lines[ind][0] {
 	case '*':
 		//		fmt.Println("*: ", string(lines[ind]))
@@ -53,17 +64,28 @@ func (c *Conn) parser(lines []string) int {
 			case '$':
 				cmd = append(cmd, lines[ind+n])
 			default:
-				if lines[ind+n] == "MULTI" || lines[ind+n] == "EXEC" {
-					remove = true
+				if lines[ind+n] == "MULTI" {
+					multi = true
+					c.multi = append(c.multi, true)
+				} else if lines[ind+n] == "EXEC" {
+					multi = true
+					c.multi = append(c.multi, false)
 				}
 				cmd = append(cmd, lines[ind+n])
+
 			}
 			//			fmt.Println("For: ", ind, n, string(lines[ind+n]))
 		}
 		ind += num * 2
-		if !remove {
-			c.cmds = append(c.cmds, cmd)
+		if !multi {
+			if c.multi {
+				c.count++
+				c.cmds[cmd] = true
+			} else {
+				c.cmds[cmd] = false
+			}
 		}
+
 	default:
 		fmt.Println("Malformed cmd")
 	}
@@ -76,6 +98,10 @@ func (c *Conn) parser(lines []string) int {
 func (c *Conn) parseCmd(buf string) error {
 
 	//	cmds := make([]string, 0)
+
+	c.count = 0
+	c.multi = false
+	c.cmds = make(map[string]bool)
 
 	lines := strings.Split(buf, "\r\n")
 
@@ -114,9 +140,16 @@ func (c *Conn) wrapCmd() {
 	c.parseCmd(string(buf[:n]))
 
 	resp := make([]byte, 128)
-	for i, el := range c.cmds {
-		fmt.Printf("cmd: %d -> %+v\n", i, el)
-		buf := []byte(strings.Join(el.([]string), "\r\n") + "\r\n")
+	if c.count > 0 {
+		c.reply = append(c.reply, "+OK\r\n")
+		for i := 0; i < c.count; i++ {
+			c.reply = append(c.reply, "+QUEUED\r\n")
+		}
+		fmt.Printf("multi: %d\n", c.count)
+	}
+	for k, v := range c.cmds {
+		fmt.Printf("cmd: %v -> %+v\n", v, k)
+		buf := []byte(strings.Join(k.([]string), "\r\n") + "\r\n")
 		r, err := c.ssdb.Write(buf)
 		if err != nil {
 			fmt.Println("Write error: ", err.Error())
