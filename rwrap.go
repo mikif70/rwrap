@@ -1,5 +1,11 @@
 // rwrap
 
+/*
+ TODO:
+	check ssdb connection:
+
+*/
+
 package main
 
 import (
@@ -115,12 +121,12 @@ func (c *Conn) parseCmd(buf string) error {
 func (c *Conn) writeCmd(buf string) (string, error) {
 	resp := make([]byte, 256)
 
-	r, err := c.ssdb.Write([]byte(buf))
+	_, err := c.ssdb.Write([]byte(buf))
 	if err != nil {
 		fmt.Println("Write error: ", err.Error())
 		return "", err
 	}
-	fmt.Println("Write: ", r, err, len(buf))
+	//	fmt.Println("Write: ", r, err, len(buf))
 	l, err := c.ssdb.Read(resp)
 	if err != nil {
 		fmt.Println("Response error: ", err.Error())
@@ -151,21 +157,21 @@ func (c *Conn) sendCmd() error {
 				return err
 			}
 			if v.multi {
-				fmt.Println("Multi ?: ", v, multi)
+				//				fmt.Println("Multi ?: ", v, multi)
 				multi++
 			}
 		} else if v.multi {
 			c.cmds[k].retval = "+OK\r\n"
 		} else {
 			c.cmds[k].retval = fmt.Sprintf("*%d\r\n", multi)
-			fmt.Println("Multi: ", multi)
+			//			fmt.Println("Multi: ", multi)
 			for multi > 0 {
-				fmt.Println("Loop :", multi)
+				//				fmt.Println("Loop :", multi)
 				c.cmds[k].retval += c.cmds[k-multi].retval
 				c.cmds[k-multi].retval = "+QUEUED\r\n"
 				multi--
 			}
-			fmt.Println("end loop: ", multi)
+			//			fmt.Println("end loop: ", multi)
 		}
 	}
 
@@ -174,12 +180,12 @@ func (c *Conn) sendCmd() error {
 
 func (c *Conn) wrapCmd(buf string) error {
 
-	fmt.Println(buf)
+	//	fmt.Println(buf)
 
 	c.parseCmd(buf)
 
 	if len(c.cmds) > 0 {
-		fmt.Println("Cmds: ", c.cmds)
+		//		fmt.Println("Cmds: ", c.cmds)
 	}
 
 	err := c.sendCmd()
@@ -193,14 +199,14 @@ func (c *Conn) wrapCmd(buf string) error {
 		reply += c.cmds[k].retval
 	}
 
-	fmt.Println(reply)
+	//	fmt.Println(reply)
 
-	r, err := c.conn.Write([]byte(reply))
+	_, err = c.conn.Write([]byte(reply))
 	if err != nil {
 		fmt.Println("Write reply error: ", err.Error())
 		return err
 	}
-	fmt.Println("Write reply: ", r, err, len(reply), string(reply))
+	//	fmt.Println("Write reply: ", r, err, len(reply), string(reply))
 
 	return nil
 }
@@ -210,6 +216,7 @@ func manageConnection(conn *net.TCPConn) {
 	fmt.Println("Manage conn: ", conn)
 	defer conn.Close()
 
+	start := time.Now()
 	counter := 1
 	for {
 		c := &Conn{
@@ -217,8 +224,7 @@ func manageConnection(conn *net.TCPConn) {
 			ssdb: config.ssdbConn,
 		}
 
-		start := time.Now()
-		fmt.Printf("Reading buf: %d\n", counter)
+		//		fmt.Printf("Reading buf: %d\n", counter)
 
 		buf := make([]byte, 512)
 
@@ -231,9 +237,9 @@ func manageConnection(conn *net.TCPConn) {
 		if err != nil {
 			break
 		}
-		fmt.Printf("wrapCmd %d: %v\n\n", counter, time.Since(start))
 		counter++
 	}
+	fmt.Printf("wrapCmd %d: %v\n\n", counter, time.Since(start))
 }
 
 func listen() *net.TCPListener {
@@ -247,15 +253,15 @@ func listen() *net.TCPListener {
 	return ln
 }
 
-func ssdbConnect() *net.TCPConn {
+func ssdbConnect() (*net.TCPConn, error) {
 	ssdb, err := net.DialTCP("tcp", nil, config.ssdbAddr)
 	if err != nil {
 		fmt.Println("Dial err: ", err.Error())
-		os.Exit(-2)
+		return nil, err
 	}
 
 	config.ssdbConn = ssdb
-	return ssdb
+	return ssdb, nil
 }
 
 func init() {
@@ -274,15 +280,20 @@ func main() {
 	ln := listen()
 	defer ln.Close()
 
-	ssdb := ssdbConnect()
-	defer ssdb.Close()
-
 	for {
 		conn, err := ln.AcceptTCP()
 		if err != nil {
 			fmt.Println("Accept err: ", err.Error())
 			continue
 		}
+
+		ssdb, err := ssdbConnect()
+		if err != nil {
+			fmt.Println("SSDB err: ", err.Error())
+			conn.Close()
+			continue
+		}
+		defer ssdb.Close()
 
 		go manageConnection(conn)
 	}
