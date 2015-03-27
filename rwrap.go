@@ -3,12 +3,8 @@
 package main
 
 import (
-	// "bufio"
-	//	"errors"
-	// "bytes"
 	"flag"
 	"fmt"
-	//"io"
 	"net"
 	"os"
 	"strconv"
@@ -28,80 +24,76 @@ type Conn struct {
 	conn  net.Conn
 	ssdb  net.Conn
 	cmds  []Cmds
-	multi []bool
 	reply []string
-	count int
+}
+
+type State struct {
+	multi bool
 }
 
 type Cmd struct {
-	length byte
+	length int
 	cmd    string
 }
 
 type Cmds struct {
-	cmds []Cmd
+	cmds    []Cmd
+	retval  string
+	enabled bool
+	multi   bool
 }
+
+type Empty struct{}
 
 var (
 	config = &Config{
 		wrapUrl: "0.0.0.0:6380",
 		ssdbUrl: "10.39.80.182:8888",
 	}
+
+	state = &State{}
 )
 
 func (c *Conn) parser(lines []string) int {
-	//	fmt.Println("Lines: ", lines)
 	ind := 0
-	multi := false
-	switch lines[ind][0] {
-	case '*':
-		//		fmt.Println("*: ", string(lines[ind]))
+	cmds := Cmds{}
+	enabled := true
+	if lines[ind][0] == '*' {
 		num, _ := strconv.Atoi(string(lines[ind][1:]))
-		cmd := make([]string, 0)
-		cmd = append(cmd, string(lines[ind]))
-		for n := 1; n <= num*2; n++ {
-			switch lines[ind+n][0] {
-			case '$':
-				cmd = append(cmd, lines[ind+n])
-			default:
-				if lines[ind+n] == "MULTI" {
-					multi = true
-					c.multi = append(c.multi, true)
-				} else if lines[ind+n] == "EXEC" {
-					multi = true
-					c.multi = append(c.multi, false)
+		n := 1
+		for n <= num*2 {
+			cmd := Cmd{}
+			if lines[ind+n][0] == '$' {
+				cmd.length, _ = strconv.Atoi(string(lines[ind+n][1:]))
+				cmd.cmd = lines[ind+n+1]
+				if cmd.cmd == "MULTI" {
+					enabled = false
+					state.multi = true
+				} else if cmd.cmd == "EXEC" {
+					enabled = false
+					state.multi = false
+				} else {
+					enabled = true
 				}
-				cmd = append(cmd, lines[ind+n])
-
+				n += 2
+			} else {
+				fmt.Println("Malformed cmd: ", lines[ind+n])
+				n++
 			}
-			//			fmt.Println("For: ", ind, n, string(lines[ind+n]))
+			cmds.cmds = append(cmds.cmds, cmd)
 		}
 		ind += num * 2
-		if !multi {
-			if c.multi {
-				c.count++
-				c.cmds[cmd] = true
-			} else {
-				c.cmds[cmd] = false
-			}
-		}
-
-	default:
+		cmds.multi = state.multi
+		cmds.enabled = enabled
+		c.cmds = append(c.cmds, cmds)
+	} else {
 		fmt.Println("Malformed cmd")
 	}
-
-	//	fmt.Println("return ind: ", ind+1)
 
 	return ind + 1
 }
 
 func (c *Conn) parseCmd(buf string) error {
-
-	//	cmds := make([]string, 0)
-
-	c.count = 0
-	c.multi = false
-	c.cmds = make(map[string]bool)
 
 	lines := strings.Split(buf, "\r\n")
 
@@ -111,67 +103,106 @@ func (c *Conn) parseCmd(buf string) error {
 	loop := true
 	ind := 0
 	for loop {
-		//		fmt.Println("ind: ", ind, llen)
 		ind += c.parser(lines[ind:])
 		if ind >= llen-1 {
 			loop = false
 		}
 	}
 
-	fmt.Printf("Cmds: %v\n", c.cmds)
+	return nil
+}
+
+func (c *Conn) writeCmd(buf string) (string, error) {
+	resp := make([]byte, 256)
+
+	r, err := c.ssdb.Write([]byte(buf))
+	if err != nil {
+		fmt.Println("Write error: ", err.Error())
+		return "", err
+	}
+	fmt.Println("Write: ", r, err, len(buf))
+	l, err := c.ssdb.Read(resp)
+	if err != nil {
+		fmt.Println("Response error: ", err.Error())
+		return "", err
+	}
+
+	return string(resp[:l]), nil
+}
+
+func (c *Conn) sendCmd() error {
+
+	var err error
+	multi := 0
+
+	for k, v := range c.cmds {
+		tot := len(v.cmds)
+		var reply string
+
+		if v.enabled {
+			reply += fmt.Sprintf("*%d\r\n", tot)
+			for _, e := range v.cmds {
+				reply += fmt.Sprintf("$%d\r\n", e.length)
+				reply += fmt.Sprintf("%s\r\n", e.cmd)
+			}
+			c.cmds[k].retval, err = c.writeCmd(reply)
+			if err != nil {
+				fmt.Println("Write Error: ", err)
+				return err
+			}
+			if v.multi {
+				fmt.Println("Multi ?: ", v, multi)
+				multi++
+			}
+		} else if v.multi {
+			c.cmds[k].retval = "+OK\r\n"
+		} else {
+			c.cmds[k].retval = fmt.Sprintf("*%d\r\n", multi)
+			fmt.Println("Multi: ", multi)
+			for multi > 0 {
+				fmt.Println("Loop :", multi)
+				c.cmds[k].retval += c.cmds[k-multi].retval
+				c.cmds[k-multi].retval = "+QUEUED\r\n"
+				multi--
+			}
+			fmt.Println("end loop: ", multi)
+		}
+	}
 
 	return nil
 }
 
-func (c *Conn) wrapCmd() {
+func (c *Conn) wrapCmd(buf string) error {
 
-	fmt.Println("Reading buf: ")
+	fmt.Println(buf)
 
-	buf := make([]byte, 512)
+	c.parseCmd(buf)
 
-	n, err := c.conn.Read(buf)
+	if len(c.cmds) > 0 {
+		fmt.Println("Cmds: ", c.cmds)
+	}
+
+	err := c.sendCmd()
 	if err != nil {
-		fmt.Println("Read error: ", err.Error())
-		return
+		fmt.Println("Write error: ", err.Error())
+		return err
 	}
 
-	//	fmt.Println("Read: ", n, buf[:n])
-
-	c.parseCmd(string(buf[:n]))
-
-	resp := make([]byte, 128)
-	if c.count > 0 {
-		c.reply = append(c.reply, "+OK\r\n")
-		for i := 0; i < c.count; i++ {
-			c.reply = append(c.reply, "+QUEUED\r\n")
-		}
-		fmt.Printf("multi: %d\n", c.count)
-	}
-	for k, v := range c.cmds {
-		fmt.Printf("cmd: %v -> %+v\n", v, k)
-		buf := []byte(strings.Join(k.([]string), "\r\n") + "\r\n")
-		r, err := c.ssdb.Write(buf)
-		if err != nil {
-			fmt.Println("Write error: ", err.Error())
-			return
-		}
-		fmt.Println("Write: ", r, err, len(buf))
-		l, err := c.ssdb.Read(resp)
-		if err != nil {
-			fmt.Println("Response error: ", err.Error())
-			return
-		}
-		c.reply = append(c.reply, string(resp[:l]))
+	var reply string
+	for k, _ := range c.cmds {
+		reply += c.cmds[k].retval
 	}
 
-	retbuf := []byte(strings.Join(c.reply, "\r\n"))
-	r, err := c.conn.Write(retbuf)
+	fmt.Println(reply)
+
+	r, err := c.conn.Write([]byte(reply))
 	if err != nil {
 		fmt.Println("Write reply error: ", err.Error())
-		return
+		return err
 	}
-	fmt.Println("Write reply: ", r, err, len(retbuf), string(retbuf))
+	fmt.Println("Write reply: ", r, err, len(reply), string(reply))
 
+	return nil
 }
 
 func manageConnection(conn *net.TCPConn) {
@@ -179,14 +210,30 @@ func manageConnection(conn *net.TCPConn) {
 	fmt.Println("Manage conn: ", conn)
 	defer conn.Close()
 
-	c := &Conn{
-		conn: conn,
-		ssdb: config.ssdbConn,
-	}
+	counter := 1
+	for {
+		c := &Conn{
+			conn: conn,
+			ssdb: config.ssdbConn,
+		}
 
-	start := time.Now()
-	c.wrapCmd()
-	fmt.Println("wrapCmd: ", time.Since(start))
+		start := time.Now()
+		fmt.Printf("Reading buf: %d\n", counter)
+
+		buf := make([]byte, 512)
+
+		n, err := c.conn.Read(buf)
+		if err != nil {
+			fmt.Println("Read error: ", err.Error())
+			break
+		}
+		err = c.wrapCmd(string(buf[:n]))
+		if err != nil {
+			break
+		}
+		fmt.Printf("wrapCmd %d: %v\n\n", counter, time.Since(start))
+		counter++
+	}
 }
 
 func listen() *net.TCPListener {
