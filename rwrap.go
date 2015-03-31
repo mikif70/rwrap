@@ -187,7 +187,7 @@ func (c *Conn) wrapCmd(buf string) error {
 	c.parseCmd(buf)
 
 	//	if len(c.cmds) > 0 {
-	fmt.Println("Cmds: ", c.cmds)
+	//	fmt.Println("Cmds: ", c.cmds)
 	//	}
 
 	err := c.sendCmd()
@@ -215,10 +215,19 @@ func (c *Conn) wrapCmd(buf string) error {
 
 func manageConnection(conn *net.TCPConn) {
 
-	fmt.Println("Manage conn: ", conn)
+	start := time.Now()
+	startMsg := fmt.Sprintf("%v: Started %v", start, conn.RemoteAddr())
 	defer conn.Close()
 
-	start := time.Now()
+	fmt.Println("Connecting SSDB....")
+	ssdb, err := ssdbConnect()
+	if err != nil {
+		fmt.Println("SSDB err: ", err.Error())
+		conn.Close()
+		return
+	}
+	defer ssdb.Close()
+
 	counter := 1
 	for {
 		c := &Conn{
@@ -232,7 +241,9 @@ func manageConnection(conn *net.TCPConn) {
 
 		n, err := c.conn.Read(buf)
 		if err != nil {
-			fmt.Println("Read error: ", err.Error())
+			if err.Error() != "EOF" {
+				fmt.Println("Read error: ", err.Error())
+			}
 			break
 		}
 
@@ -243,7 +254,7 @@ func manageConnection(conn *net.TCPConn) {
 		}
 		counter++
 	}
-	fmt.Printf("wrapCmd %d: %v\n\n", counter, time.Since(start))
+	fmt.Printf("%s - executed %d cmds in %v\n\n", startMsg, counter, time.Since(start))
 }
 
 func listen() *net.TCPListener {
@@ -259,6 +270,7 @@ func listen() *net.TCPListener {
 
 func ssdbConnect() (*net.TCPConn, error) {
 	ssdb, err := net.DialTCP("tcp", nil, config.ssdbAddr)
+	ssdb.SetDeadline(time.Now().Add(time.Second))
 	if err != nil {
 		fmt.Println("Dial err: ", err.Error())
 		return nil, err
@@ -285,19 +297,12 @@ func main() {
 	defer ln.Close()
 
 	for {
+		fmt.Println("Waiting...")
 		conn, err := ln.AcceptTCP()
 		if err != nil {
 			fmt.Println("Accept err: ", err.Error())
 			continue
 		}
-
-		ssdb, err := ssdbConnect()
-		if err != nil {
-			fmt.Println("SSDB err: ", err.Error())
-			conn.Close()
-			continue
-		}
-		defer ssdb.Close()
 
 		go manageConnection(conn)
 	}
