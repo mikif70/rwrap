@@ -9,26 +9,33 @@
 package main
 
 import (
+	//	"bytes"
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"os"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	wrapUrl  string
-	ssdbUrl  string
-	wrapAddr *net.TCPAddr
-	ssdbAddr *net.TCPAddr
-	ssdbConn *net.TCPConn
+	wrapUrl    string
+	ssdbUrl    string
+	wrapAddr   *net.TCPAddr
+	ssdbAddr   *net.TCPAddr
+	cpuprofile string
+	logfile    string
+	debug      bool
+	//	ssdbConn *net.TCPConn
 }
 
 type Conn struct {
 	conn  net.Conn
 	ssdb  net.Conn
+	buf   string
 	cmds  []Cmds
 	reply []string
 }
@@ -53,69 +60,18 @@ type Empty struct{}
 
 var (
 	config = &Config{
-		wrapUrl: "0.0.0.0:6380",
-		ssdbUrl: "10.39.80.182:8888",
+		wrapUrl:    "0.0.0.0:6380",
+		ssdbUrl:    "10.39.80.182:8888",
+		cpuprofile: "",
+		logfile:    "",
+		debug:      false,
 	}
 
 	state = &State{}
 )
 
-func (c *Conn) parser(lines []string) int {
-	ind := 0
-	cmds := Cmds{}
-	enabled := true
-	if lines[ind][0] == '*' {
-		num, _ := strconv.Atoi(string(lines[ind][1:]))
-		n := 1
-		for n <= num*2 {
-			cmd := Cmd{}
-			if lines[ind+n][0] == '$' {
-				cmd.length, _ = strconv.Atoi(string(lines[ind+n][1:]))
-				cmd.cmd = lines[ind+n+1]
-				if cmd.cmd == "MULTI" {
-					enabled = false
-					state.multi = true
-				} else if cmd.cmd == "EXEC" {
-					enabled = false
-					state.multi = false
-				} else {
-					enabled = true
-				}
-				n += 2
-			} else {
-				fmt.Println("Malformed cmd: ", lines[ind+n])
-				n++
-			}
-			cmds.cmds = append(cmds.cmds, cmd)
-		}
-		ind += num * 2
-		cmds.multi = state.multi
-		cmds.enabled = enabled
-		c.cmds = append(c.cmds, cmds)
-	} else {
-		fmt.Println("Malformed cmd")
-	}
+func PrintOut() {
 
-	return ind + 1
-}
-
-func (c *Conn) parseCmd(buf string) error {
-
-	lines := strings.Split(buf, "\r\n")
-
-	lines = lines[:len(lines)-1]
-	llen := len(lines)
-
-	loop := true
-	ind := 0
-	for loop {
-		ind += c.parser(lines[ind:])
-		if ind >= llen-1 {
-			loop = false
-		}
-	}
-
-	return nil
 }
 
 func (c *Conn) writeCmd(buf string) (string, error) {
@@ -180,14 +136,72 @@ func (c *Conn) sendCmd() error {
 	return nil
 }
 
-func (c *Conn) wrapCmd(buf string) error {
+func (c *Conn) parser(lines []string) int {
+	ind := 0
+	cmds := Cmds{}
+	enabled := true
+	if lines[ind][0] == '*' {
+		num, _ := strconv.Atoi(string(lines[ind][1:]))
+		n := 1
+		for n <= num*2 {
+			cmd := Cmd{}
+			if lines[ind+n][0] == '$' {
+				cmd.length, _ = strconv.Atoi(string(lines[ind+n][1:]))
+				cmd.cmd = lines[ind+n+1]
+				if cmd.cmd == "MULTI" {
+					enabled = false
+					state.multi = true
+				} else if cmd.cmd == "EXEC" {
+					enabled = false
+					state.multi = false
+				} else {
+					enabled = true
+				}
+				n += 2
+			} else {
+				fmt.Println("Malformed cmd: ", lines[ind+n])
+				n++
+			}
+			cmds.cmds = append(cmds.cmds, cmd)
+		}
+		ind += num * 2
+		cmds.multi = state.multi
+		cmds.enabled = enabled
+		c.cmds = append(c.cmds, cmds)
+	} else {
+		fmt.Println("Malformed cmd")
+	}
+
+	return ind + 1
+}
+
+func (c *Conn) parseCmd() error {
+
+	lines := strings.Split(c.buf, "\r\n")
+
+	lines = lines[:len(lines)-1]
+	llen := len(lines)
+
+	loop := true
+	ind := 0
+	for loop {
+		ind += c.parser(lines[ind:])
+		if ind >= llen-1 {
+			loop = false
+		}
+	}
+
+	return nil
+}
+
+func (c *Conn) wrapCmd() error {
 
 	//	fmt.Println(buf)
 
-	c.parseCmd(buf)
+	c.parseCmd()
 
 	//	if len(c.cmds) > 0 {
-	//	fmt.Println("Cmds: ", c.cmds)
+	fmt.Println("Cmds: ", c.cmds)
 	//	}
 
 	err := c.sendCmd()
@@ -201,7 +215,7 @@ func (c *Conn) wrapCmd(buf string) error {
 		reply += c.cmds[k].retval
 	}
 
-	//	fmt.Println(reply)
+	fmt.Printf("Reply: %+v\n", strings.Split(reply, "\r\n"))
 
 	_, err = c.conn.Write([]byte(reply))
 	if err != nil {
@@ -220,7 +234,8 @@ func manageConnection(conn *net.TCPConn) {
 	defer conn.Close()
 
 	fmt.Println("Connecting SSDB....")
-	ssdb, err := ssdbConnect()
+
+	ssdb, err := ssdbConnect(3)
 	if err != nil {
 		fmt.Println("SSDB err: ", err.Error())
 		conn.Close()
@@ -230,12 +245,13 @@ func manageConnection(conn *net.TCPConn) {
 
 	counter := 1
 	for {
-		c := &Conn{
-			conn: conn,
-			ssdb: config.ssdbConn,
-		}
 
 		//		fmt.Printf("Reading buf: %d\n", counter)
+
+		c := &Conn{
+			conn: conn,
+			ssdb: ssdb,
+		}
 
 		buf := make([]byte, 512)
 
@@ -247,8 +263,9 @@ func manageConnection(conn *net.TCPConn) {
 			break
 		}
 
+		c.buf = string(buf[:n])
 		//		fmt.Printf("Buffer: %+v\n", string(buf[:n]))
-		err = c.wrapCmd(string(buf[:n]))
+		err = c.wrapCmd()
 		if err != nil {
 			break
 		}
@@ -268,21 +285,28 @@ func listen() *net.TCPListener {
 	return ln
 }
 
-func ssdbConnect() (*net.TCPConn, error) {
+func ssdbConnect(count int) (*net.TCPConn, error) {
 	ssdb, err := net.DialTCP("tcp", nil, config.ssdbAddr)
-	ssdb.SetDeadline(time.Now().Add(time.Second))
 	if err != nil {
 		fmt.Println("Dial err: ", err.Error())
-		return nil, err
+		if count > 1 {
+			ssdb, err = ssdbConnect(count - 1)
+			return ssdb, err
+		} else {
+			return nil, err
+		}
 	}
-
-	config.ssdbConn = ssdb
+	ssdb.SetDeadline(time.Now().Add(time.Nanosecond * 200000000))
+	//	config.ssdbConn = ssdb
 	return ssdb, nil
 }
 
 func init() {
 	flag.StringVar(&config.ssdbUrl, "s", config.ssdbUrl, "ssdb ip:port")
 	flag.StringVar(&config.wrapUrl, "l", config.wrapUrl, "listen ip:port")
+	flag.StringVar(&config.cpuprofile, "cpuprofile", config.cpuprofile, "write cpu profile to file")
+	flag.StringVar(&config.logfile, "log", config.logfile, "write log to file")
+	flag.BoolVar(&config.debug, "debug", config.debug, "activate debug")
 }
 
 func main() {
@@ -292,6 +316,15 @@ func main() {
 	config.wrapAddr, _ = net.ResolveTCPAddr("tcp", config.wrapUrl)
 
 	fmt.Println(config)
+
+	if config.cpuprofile != "" {
+		f, err := os.Create(config.cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 
 	ln := listen()
 	defer ln.Close()
