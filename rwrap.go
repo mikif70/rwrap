@@ -15,9 +15,11 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"runtime/pprof"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -70,27 +72,21 @@ var (
 	state = &State{}
 )
 
-func PrintOut() {
-
-}
-
 func (c *Conn) writeCmd(buf string) (string, error) {
 	resp := make([]byte, 256)
 
-	//	fmt.Printf("Write: %+v\n", buf)
 	_, err := c.ssdb.Write([]byte(buf))
 	if err != nil {
-		fmt.Println("Write error: ", err.Error())
-		return "", err
-	}
-	//	fmt.Println("Write: ", r, err, len(buf))
-	l, err := c.ssdb.Read(resp)
-	if err != nil {
-		fmt.Println("Response error: ", err.Error())
+		log.Println("Write error: ", err.Error())
 		return "", err
 	}
 
-	//	fmt.Printf("Resp: %+v\n", string(resp[:l]))
+	l, err := c.ssdb.Read(resp)
+	if err != nil {
+		log.Println("Response error: ", err.Error())
+		return "", err
+	}
+
 	return string(resp[:l]), nil
 }
 
@@ -111,25 +107,21 @@ func (c *Conn) sendCmd() error {
 			}
 			c.cmds[k].retval, err = c.writeCmd(reply)
 			if err != nil {
-				fmt.Println("Write Error: ", err)
+				log.Println("Write Error: ", err)
 				return err
 			}
 			if v.multi {
-				//				fmt.Println("Multi ?: ", v, multi)
 				multi++
 			}
 		} else if v.multi {
 			c.cmds[k].retval = "+OK\r\n"
 		} else {
 			c.cmds[k].retval = fmt.Sprintf("*%d\r\n", multi)
-			//			fmt.Println("Multi: ", multi)
 			for multi > 0 {
-				//				fmt.Println("Loop :", multi)
 				c.cmds[k].retval += c.cmds[k-multi].retval
 				c.cmds[k-multi].retval = "+QUEUED\r\n"
 				multi--
 			}
-			//			fmt.Println("end loop: ", multi)
 		}
 	}
 
@@ -159,7 +151,7 @@ func (c *Conn) parser(lines []string) int {
 				}
 				n += 2
 			} else {
-				fmt.Println("Malformed cmd: ", lines[ind+n])
+				log.Println("Malformed cmd: ", lines[ind+n])
 				n++
 			}
 			cmds.cmds = append(cmds.cmds, cmd)
@@ -169,7 +161,7 @@ func (c *Conn) parser(lines []string) int {
 		cmds.enabled = enabled
 		c.cmds = append(c.cmds, cmds)
 	} else {
-		fmt.Println("Malformed cmd")
+		log.Println("Malformed cmd")
 	}
 
 	return ind + 1
@@ -196,17 +188,13 @@ func (c *Conn) parseCmd() error {
 
 func (c *Conn) wrapCmd() error {
 
-	//	fmt.Println(buf)
-
 	c.parseCmd()
 
-	//	if len(c.cmds) > 0 {
-	fmt.Println("Cmds: ", c.cmds)
-	//	}
+	log.Println("Cmds: ", c.cmds)
 
 	err := c.sendCmd()
 	if err != nil {
-		fmt.Println("Write error: ", err.Error())
+		log.Println("Write error: ", err.Error())
 		return err
 	}
 
@@ -215,14 +203,13 @@ func (c *Conn) wrapCmd() error {
 		reply += c.cmds[k].retval
 	}
 
-	fmt.Printf("Reply: %+v\n", strings.Split(reply, "\r\n"))
+	log.Printf("Reply: %+v\n", strings.Split(reply, "\r\n"))
 
 	_, err = c.conn.Write([]byte(reply))
 	if err != nil {
-		fmt.Println("Write reply error: ", err.Error())
+		log.Println("Write reply error: ", err.Error())
 		return err
 	}
-	//	fmt.Println("Write reply: ", r, err, len(reply), string(reply))
 
 	return nil
 }
@@ -233,11 +220,11 @@ func manageConnection(conn *net.TCPConn) {
 	startMsg := fmt.Sprintf("%v: Started %v", start, conn.RemoteAddr())
 	defer conn.Close()
 
-	fmt.Println("Connecting SSDB....")
+	log.Println("Connecting SSDB....")
 
 	ssdb, err := ssdbConnect(3)
 	if err != nil {
-		fmt.Println("SSDB err: ", err.Error())
+		log.Println("SSDB err: ", err.Error())
 		conn.Close()
 		return
 	}
@@ -245,9 +232,6 @@ func manageConnection(conn *net.TCPConn) {
 
 	counter := 1
 	for {
-
-		//		fmt.Printf("Reading buf: %d\n", counter)
-
 		c := &Conn{
 			conn: conn,
 			ssdb: ssdb,
@@ -258,28 +242,30 @@ func manageConnection(conn *net.TCPConn) {
 		n, err := c.conn.Read(buf)
 		if err != nil {
 			if err.Error() != "EOF" {
-				fmt.Println("Read error: ", err.Error())
+				log.Println("Read error: ", err.Error())
+			} else {
+				log.Println("EOF: ", err.Error())
 			}
+
 			break
 		}
 
+		log.Printf("Buffer (%d): %+v\n", counter, buf[:n])
 		c.buf = string(buf[:n])
-		//		fmt.Printf("Buffer: %+v\n", string(buf[:n]))
 		err = c.wrapCmd()
 		if err != nil {
 			break
 		}
 		counter++
 	}
-	fmt.Printf("%s - executed %d cmds in %v\n\n", startMsg, counter, time.Since(start))
+	log.Printf("%s - executed %d cmds in %v\n\n", startMsg, counter, time.Since(start))
 }
 
 func listen() *net.TCPListener {
-	fmt.Printf("Listen: %+v\n", config.wrapAddr)
+	log.Printf("Listen: %+v\n", config.wrapAddr)
 	ln, err := net.ListenTCP("tcp", config.wrapAddr)
 	if err != nil {
-		fmt.Println("Listen err: ", err.Error())
-		os.Exit(-1)
+		log.Fatalln("Listen err: ", err.Error())
 	}
 
 	return ln
@@ -288,7 +274,7 @@ func listen() *net.TCPListener {
 func ssdbConnect(count int) (*net.TCPConn, error) {
 	ssdb, err := net.DialTCP("tcp", nil, config.ssdbAddr)
 	if err != nil {
-		fmt.Println("Dial err: ", err.Error())
+		log.Println("Dial err: ", err.Error())
 		if count > 1 {
 			ssdb, err = ssdbConnect(count - 1)
 			return ssdb, err
@@ -315,28 +301,58 @@ func main() {
 	config.ssdbAddr, _ = net.ResolveTCPAddr("tcp", config.ssdbUrl)
 	config.wrapAddr, _ = net.ResolveTCPAddr("tcp", config.wrapUrl)
 
-	fmt.Println(config)
-
 	if config.cpuprofile != "" {
-		f, err := os.Create(config.cpuprofile)
+		fProfile, err := os.OpenFile(config.cpuprofile, os.O_CREATE, 0666)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal("Failed to open profile file", err)
 		}
-		pprof.StartCPUProfile(f)
+		pprof.StartCPUProfile(fProfile)
 		defer pprof.StopCPUProfile()
+		defer fProfile.Close()
 	}
+
+	if config.logfile != "" {
+		fLog, err := os.OpenFile(config.logfile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if err != nil {
+			log.Fatal("Failed to open log file", err)
+		}
+		defer fLog.Close()
+		log.SetOutput(fLog)
+	} else {
+		log.SetOutput(os.Stdout)
+	}
+
+	if config.debug {
+		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+
+	} else {
+		log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	}
+
+	log.Println(config)
 
 	ln := listen()
 	defer ln.Close()
 
-	for {
-		fmt.Println("Waiting...")
-		conn, err := ln.AcceptTCP()
-		if err != nil {
-			fmt.Println("Accept err: ", err.Error())
-			continue
-		}
+	sigchan := make(chan os.Signal, 1)
+	signal.Notify(sigchan, syscall.SIGHUP, os.Interrupt, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGQUIT)
 
-		go manageConnection(conn)
+	go func() {
+		for {
+			log.Println("Waiting...")
+			conn, err := ln.AcceptTCP()
+			if err != nil {
+				log.Println("Accept err: ", err.Error())
+				continue
+			}
+
+			go manageConnection(conn)
+		}
+	}()
+
+	for sig := range sigchan {
+		log.Println("Signal: ", sig)
+		break
+		//		os.Exit(0)
 	}
 }
