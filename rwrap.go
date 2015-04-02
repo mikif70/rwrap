@@ -12,6 +12,8 @@ import (
 	//	"bytes"
 	"flag"
 	"fmt"
+	//	"io"
+	"bufio"
 	"log"
 	"net"
 	"os"
@@ -35,8 +37,10 @@ type Config struct {
 }
 
 type Conn struct {
-	conn  net.Conn
-	ssdb  net.Conn
+	conn  *net.TCPConn
+	ssdb  *net.TCPConn
+	cBuf  *bufio.ReadWriter
+	sBuf  *bufio.ReadWriter
 	buf   string
 	cmds  []Cmds
 	reply []string
@@ -75,13 +79,13 @@ var (
 func (c *Conn) writeCmd(buf string) (string, error) {
 	resp := make([]byte, 256)
 
-	_, err := c.ssdb.Write([]byte(buf))
+	_, err := (*c.ssdb).Write([]byte(buf))
 	if err != nil {
 		log.Println("Write error: ", err.Error())
 		return "", err
 	}
 
-	l, err := c.ssdb.Read(resp)
+	l, err := (*c.ssdb).Read(resp)
 	if err != nil {
 		log.Println("Response error: ", err.Error())
 		return "", err
@@ -205,7 +209,7 @@ func (c *Conn) wrapCmd() error {
 
 	log.Printf("Reply: %+v\n", strings.Split(reply, "\r\n"))
 
-	_, err = c.conn.Write([]byte(reply))
+	_, err = (*c.conn).Write([]byte(reply))
 	if err != nil {
 		log.Println("Write reply error: ", err.Error())
 		return err
@@ -216,12 +220,12 @@ func (c *Conn) wrapCmd() error {
 
 func manageConnection(conn *net.TCPConn) {
 
+	log.Println("New Connection: ", conn.RemoteAddr())
 	start := time.Now()
 	startMsg := fmt.Sprintf("%v: Started %v", start, conn.RemoteAddr())
 	defer conn.Close()
 
 	log.Println("Connecting SSDB....")
-
 	ssdb, err := ssdbConnect(3)
 	if err != nil {
 		log.Println("SSDB err: ", err.Error())
@@ -230,15 +234,18 @@ func manageConnection(conn *net.TCPConn) {
 	}
 	defer ssdb.Close()
 
+	c := &Conn{
+		conn: conn,
+		ssdb: ssdb,
+	}
+
+	c.cBuf = bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+	c.sBuf = bufio.NewReadWriter(bufio.NewReader(ssdb), bufio.NewWriter(ssdb))
+
 	counter := 1
 	for {
-		c := &Conn{
-			conn: conn,
-			ssdb: ssdb,
-		}
 
-		buf := make([]byte, 512)
-
+		buf := make([]byte, 1024)
 		n, err := c.conn.Read(buf)
 		if err != nil {
 			if err.Error() != "EOF" {
@@ -250,12 +257,13 @@ func manageConnection(conn *net.TCPConn) {
 			break
 		}
 
-		log.Printf("Buffer (%d): %+v\n", counter, buf[:n])
+		log.Printf("Buffer (%d): %d -> %+v\n", counter, n, buf[:n])
 		c.buf = string(buf[:n])
 		err = c.wrapCmd()
 		if err != nil {
 			break
 		}
+
 		counter++
 	}
 	log.Printf("%s - executed %d cmds in %v\n\n", startMsg, counter, time.Since(start))
@@ -339,13 +347,13 @@ func main() {
 
 	go func() {
 		for {
-			log.Println("Waiting...")
 			conn, err := ln.AcceptTCP()
 			if err != nil {
 				log.Println("Accept err: ", err.Error())
 				continue
 			}
 
+			log.SetPrefix(conn.RemoteAddr().String() + ":")
 			go manageConnection(conn)
 		}
 	}()
