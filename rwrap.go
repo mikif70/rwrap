@@ -10,10 +10,10 @@ package main
 
 import (
 	//	"bytes"
+	"bufio"
 	"flag"
 	"fmt"
 	//	"io"
-	"bufio"
 	"log"
 	"net"
 	"os"
@@ -30,20 +30,24 @@ type Config struct {
 	ssdbUrl    string
 	wrapAddr   *net.TCPAddr
 	ssdbAddr   *net.TCPAddr
-	cpuprofile string
 	logfile    string
+	logOut     *os.File
+	logFlags   int
+	logger     *log.Logger
+	cpuprofile string
 	debug      bool
 	//	ssdbConn *net.TCPConn
 }
 
 type Conn struct {
-	conn  *net.TCPConn
-	ssdb  *net.TCPConn
-	cBuf  *bufio.ReadWriter
-	sBuf  *bufio.ReadWriter
-	buf   string
-	cmds  []Cmds
-	reply []string
+	conn   *net.TCPConn
+	ssdb   *net.TCPConn
+	cBuf   *bufio.ReadWriter
+	sBuf   *bufio.ReadWriter
+	logger *log.Logger
+	buf    []string
+	cmds   []Cmds
+	reply  []string
 }
 
 type State struct {
@@ -81,13 +85,13 @@ func (c *Conn) writeCmd(buf string) (string, error) {
 
 	_, err := (*c.ssdb).Write([]byte(buf))
 	if err != nil {
-		log.Println("Write error: ", err.Error())
+		c.logger.Println("Write error: ", err.Error())
 		return "", err
 	}
 
 	l, err := (*c.ssdb).Read(resp)
 	if err != nil {
-		log.Println("Response error: ", err.Error())
+		c.logger.Println("Response error: ", err.Error())
 		return "", err
 	}
 
@@ -111,7 +115,7 @@ func (c *Conn) sendCmd() error {
 			}
 			c.cmds[k].retval, err = c.writeCmd(reply)
 			if err != nil {
-				log.Println("Write Error: ", err)
+				c.logger.Println("Write Error: ", err)
 				return err
 			}
 			if v.multi {
@@ -134,13 +138,13 @@ func (c *Conn) sendCmd() error {
 
 func (c *Conn) parser(lines []string) int {
 	ind := 0
-	cmds := Cmds{}
+	cmds := new(Cmds)
 	enabled := true
 	if lines[ind][0] == '*' {
 		num, _ := strconv.Atoi(string(lines[ind][1:]))
 		n := 1
 		for n <= num*2 {
-			cmd := Cmd{}
+			cmd := new(Cmd)
 			if lines[ind+n][0] == '$' {
 				cmd.length, _ = strconv.Atoi(string(lines[ind+n][1:]))
 				cmd.cmd = lines[ind+n+1]
@@ -155,17 +159,17 @@ func (c *Conn) parser(lines []string) int {
 				}
 				n += 2
 			} else {
-				log.Println("Malformed cmd: ", lines[ind+n])
+				c.logger.Println("Malformed cmd: ", lines[ind+n])
 				n++
 			}
-			cmds.cmds = append(cmds.cmds, cmd)
+			cmds.cmds = append(cmds.cmds, *cmd)
 		}
 		ind += num * 2
 		cmds.multi = state.multi
 		cmds.enabled = enabled
-		c.cmds = append(c.cmds, cmds)
+		c.cmds = append(c.cmds, *cmds)
 	} else {
-		log.Println("Malformed cmd")
+		c.logger.Println("Malformed cmd")
 	}
 
 	return ind + 1
@@ -173,17 +177,13 @@ func (c *Conn) parser(lines []string) int {
 
 func (c *Conn) parseCmd() error {
 
-	lines := strings.Split(c.buf, "\r\n")
+	llen := len(c.buf)
 
-	lines = lines[:len(lines)-1]
-	llen := len(lines)
-
-	loop := true
 	ind := 0
-	for loop {
-		ind += c.parser(lines[ind:])
+	for {
+		ind += c.parser(c.buf[ind:])
 		if ind >= llen-1 {
-			loop = false
+			break
 		}
 	}
 
@@ -194,11 +194,11 @@ func (c *Conn) wrapCmd() error {
 
 	c.parseCmd()
 
-	log.Println("Cmds: ", c.cmds)
+	c.logger.Println("Cmds: ", c.cmds)
 
 	err := c.sendCmd()
 	if err != nil {
-		log.Println("Write error: ", err.Error())
+		c.logger.Println("Write error: ", err.Error())
 		return err
 	}
 
@@ -207,73 +207,83 @@ func (c *Conn) wrapCmd() error {
 		reply += c.cmds[k].retval
 	}
 
-	log.Printf("Reply: %+v\n", strings.Split(reply, "\r\n"))
+	c.logger.Printf("Reply: %+v\n", strings.Split(reply, "\r\n"))
 
 	_, err = (*c.conn).Write([]byte(reply))
 	if err != nil {
-		log.Println("Write reply error: ", err.Error())
+		c.logger.Println("Write reply error: ", err.Error())
 		return err
 	}
 
 	return nil
 }
 
+/*
+func (c *Conn) flush() {
+	c.buf = ""
+	c.cmds = make([]Cmds, 0)
+	c.reply = make([]string, 0)
+}
+*/
+
 func manageConnection(conn *net.TCPConn) {
 
-	log.Println("New Connection: ", conn.RemoteAddr())
+	var err error
+
+	c := new(Conn)
+	c.conn = conn
+	//	c.conn.SetReadDeadline(time.Now().Add(time.Nanosecond * 1000000 * 50))
+	c.logger = log.New(config.logOut, conn.RemoteAddr().String()+"::", config.logFlags)
+	//	defer c.flush()
+
+	c.logger.Println("New Connection: ", conn.RemoteAddr())
 	start := time.Now()
 	startMsg := fmt.Sprintf("%v: Started %v", start, conn.RemoteAddr())
 	defer conn.Close()
 
-	log.Println("Connecting SSDB....")
-	ssdb, err := ssdbConnect(3)
+	c.logger.Println("Connecting SSDB....")
+	c.ssdb, err = ssdbConnect(3)
 	if err != nil {
-		log.Println("SSDB err: ", err.Error())
+		c.logger.Println("SSDB err: ", err.Error())
 		conn.Close()
 		return
 	}
-	defer ssdb.Close()
-
-	c := &Conn{
-		conn: conn,
-		ssdb: ssdb,
-	}
+	defer c.ssdb.Close()
 
 	c.cBuf = bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
-	c.sBuf = bufio.NewReadWriter(bufio.NewReader(ssdb), bufio.NewWriter(ssdb))
+	c.sBuf = bufio.NewReadWriter(bufio.NewReader(c.ssdb), bufio.NewWriter(c.ssdb))
+	c.buf = make([]string, 0)
 
+	scanner := bufio.NewScanner(c.conn)
 	counter := 1
 	for {
-
-		buf := make([]byte, 1024)
-		n, err := c.conn.Read(buf)
-		if err != nil {
-			if err.Error() != "EOF" {
-				log.Println("Read error: ", err.Error())
-			} else {
-				log.Println("EOF: ", err.Error())
+		for {
+			if ok := scanner.Scan(); !ok {
+				break
 			}
-
-			break
+			line := scanner.Text()
+			c.logger.Printf("Line (%d): %s\n", counter, line)
+			c.buf = append(c.buf, line)
+			counter++
 		}
-
-		log.Printf("Buffer (%d): %d -> %+v\n", counter, n, buf[:n])
-		c.buf = string(buf[:n])
+		if err := scanner.Err(); err != nil {
+			c.logger.Printf("scanner error: %v\n\n", err.Error())
+		}
 		err = c.wrapCmd()
 		if err != nil {
+			c.logger.Printf("wrapCmd error: %v\n\n", err.Error())
 			break
 		}
-
-		counter++
 	}
-	log.Printf("%s - executed %d cmds in %v\n\n", startMsg, counter, time.Since(start))
+
+	c.logger.Printf("%s - executed %d cmds in %v\n\n", startMsg, counter, time.Since(start))
 }
 
 func listen() *net.TCPListener {
-	log.Printf("Listen: %+v\n", config.wrapAddr)
+	config.logger.Printf("Listen: %+v\n", config.wrapAddr)
 	ln, err := net.ListenTCP("tcp", config.wrapAddr)
 	if err != nil {
-		log.Fatalln("Listen err: ", err.Error())
+		config.logger.Fatalln("Listen err: ", err.Error())
 	}
 
 	return ln
@@ -282,7 +292,7 @@ func listen() *net.TCPListener {
 func ssdbConnect(count int) (*net.TCPConn, error) {
 	ssdb, err := net.DialTCP("tcp", nil, config.ssdbAddr)
 	if err != nil {
-		log.Println("Dial err: ", err.Error())
+		config.logger.Println("Dial err: ", err.Error())
 		if count > 1 {
 			ssdb, err = ssdbConnect(count - 1)
 			return ssdb, err
@@ -304,6 +314,9 @@ func init() {
 }
 
 func main() {
+
+	var err error
+
 	flag.Parse()
 
 	config.ssdbAddr, _ = net.ResolveTCPAddr("tcp", config.ssdbUrl)
@@ -320,24 +333,25 @@ func main() {
 	}
 
 	if config.logfile != "" {
-		fLog, err := os.OpenFile(config.logfile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		config.logOut, err = os.OpenFile(config.logfile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 		if err != nil {
 			log.Fatal("Failed to open log file", err)
 		}
-		defer fLog.Close()
-		log.SetOutput(fLog)
+		defer config.logOut.Close()
 	} else {
-		log.SetOutput(os.Stdout)
+		config.logOut = os.Stdout
 	}
 
 	if config.debug {
-		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+		config.logFlags = log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile
 
 	} else {
-		log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+		config.logFlags = log.Ldate | log.Ltime | log.Lshortfile
 	}
 
-	log.Println(config)
+	config.logger = log.New(config.logOut, "MAIN::", config.logFlags)
+
+	config.logger.Println(config)
 
 	ln := listen()
 	defer ln.Close()
@@ -345,21 +359,20 @@ func main() {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGHUP, os.Interrupt, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGQUIT)
 
-	go func() {
+	go func(ln *net.TCPListener) {
 		for {
 			conn, err := ln.AcceptTCP()
 			if err != nil {
-				log.Println("Accept err: ", err.Error())
+				config.logger.Println("Accept err: ", err.Error())
 				continue
 			}
 
-			log.SetPrefix(conn.RemoteAddr().String() + ":")
 			go manageConnection(conn)
 		}
-	}()
+	}(ln)
 
 	for sig := range sigchan {
-		log.Println("Signal: ", sig)
+		config.logger.Println("Signal: ", sig)
 		break
 		//		os.Exit(0)
 	}
