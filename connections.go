@@ -2,11 +2,8 @@
 package main
 
 import (
-	"bufio"
-	"fmt"
 	"log"
 	"net"
-	"time"
 )
 
 func listen() *net.TCPListener {
@@ -37,6 +34,7 @@ func ssdbConnect(count int) (*net.TCPConn, error) {
 }
 */
 
+/**
 func manageConnection(conn *net.TCPConn) {
 
 	log.Println("New Connection: ", conn.RemoteAddr())
@@ -44,7 +42,7 @@ func manageConnection(conn *net.TCPConn) {
 	startMsg := fmt.Sprintf("%v: Started %v", start, conn.RemoteAddr())
 	defer conn.Close()
 
-	/*
+
 		log.Println("Connecting SSDB....")
 		ssdb, err := ssdbConnect(3)
 		if err != nil {
@@ -53,30 +51,16 @@ func manageConnection(conn *net.TCPConn) {
 			return
 		}
 		defer ssdb.Close()
-	*/
 
 	c := &Conn{
-		conn:  conn,
-		cBuf:  bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
-		cmds:  make([]Cmd, 0),
-		multi: false,
+		conn:          conn,
+		cBuf:          bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
+		cmds:          make([]Cmd, 0),
+		dovecotStatus: DovecotWait,
 	}
 
 	//	c.sBuf = bufio.NewReadWriter(bufio.NewReader(ssdb), bufio.NewWriter(ssdb))
 
-	for {
-		err := c.parseCmd()
-		fmt.Println("Buffered: ", c.cBuf.Writer.Buffered())
-		c.cBuf.Flush()
-		if err != nil {
-			fmt.Println("Error: ", err)
-			break
-		}
-	}
-
-	fmt.Println("Cmds: ", c.cmds)
-
-	/*
 		counter := 1
 		for {
 
@@ -101,6 +85,6 @@ func manageConnection(conn *net.TCPConn) {
 
 			counter++
 		}
-	*/
-	log.Printf("%s - executed cmds in %v\n\n", startMsg, time.Since(start))
+
 }
+*/

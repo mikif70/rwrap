@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"net"
@@ -49,7 +50,15 @@ func main() {
 				continue
 			}
 
-			go manageConnection(conn)
+			c := Conn{
+				conn:          conn,
+				cBuf:          bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
+				cmds:          make([]string, 0),
+				dovecotStatus: DovecotWait,
+				cmdStatus:     CmdCmd,
+			}
+
+			go c.handleConn()
 		}
 	}(ln)
 

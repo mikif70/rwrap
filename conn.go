@@ -4,7 +4,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
+	"time"
 )
 
 /*
@@ -104,7 +106,7 @@ func (c *Conn) parser(lines string) int {
 }
 */
 
-func (c *Conn) parseCmd() error {
+func (c *Conn) parser() error {
 
 	fmt.Println("\nReading...")
 	line, err := c.cBuf.ReadBytes('\n')
@@ -122,39 +124,115 @@ func (c *Conn) parseCmd() error {
 
 	line = line[:l-2]
 
-	fmt.Println("Line: ", line, string(line))
+	sline := string(line)
 
+	fmt.Println("Line: ", line, sline)
+
+	fmt.Println("CmdStatus: ", getCmdStatus(c.cmdStatus))
 	//	cmd := new(Cmd)
 	switch line[0] {
 	case '*':
+		c.cmdStatus = CmdStar
 		num, _ := strconv.Atoi(string(line[1:]))
 		fmt.Println("*: ", num)
-		for i := 0; i < num*2; i++ {
-			c.parseCmd()
-		}
-	case '$':
-		num, _ := strconv.Atoi(string(line[1:]))
-		fmt.Println("$: ", num)
-	case '+':
-	case ':':
-	default:
-		fmt.Println("cmd: ", line)
-		c.cmds = append(c.cmds, Cmd{cmd: string(line)})
-		if c.multi {
-			if string(line) == "EXEC" {
-				c.cBuf.WriteString("+OK\r\n")
-				c.multi = false
-				c.cBuf.Flush()
-			} else {
-				c.cBuf.WriteString("+QUEUED\r\n")
+		for i := 0; i < num; i++ {
+			err := c.parser()
+			if err != nil {
+				return err
 			}
-		} else {
-			c.cBuf.WriteString("+OK\r\n")
 		}
-		if string(line) == "MULTI" {
-			c.multi = true
+		fmt.Println("Status: ", getCmdStatus(c.cmdStatus), getDovecotStatus(c.dovecotStatus))
+	case '$':
+		switch c.cmdStatus {
+		case CmdStar:
+			c.cmdStatus = CmdCmd
+			err := c.parser()
+			if err != nil {
+				return err
+			}
+		case CmdCmd:
+			c.cmdStatus = CmdParam
+			err := c.parser()
+			if err != nil {
+				return err
+			}
+		default:
+			fmt.Println("Protocol error: ", line)
+			return errors.New("Protocol Error: " + sline)
+		}
+	case '+':
+		c.cmdStatus = CmdPlus
+	case ':':
+		c.cmdStatus = CmdColon
+	default:
+		switch c.cmdStatus {
+		case CmdCmd:
+			fmt.Println("cmd: ", line)
+			switch sline {
+			case "GET":
+				fmt.Println("GET")
+				c.dovecotStatus = DovecotGet
+				return nil
+			case "MULTI":
+				fmt.Println("MULTI")
+				c.dovecotStatus = DovecotMulti
+				return nil
+			case "EXEC":
+				fmt.Println("EXEC")
+				c.dovecotStatus = DovecotExec
+				return nil
+			default:
+				if c.dovecotStatus == DovecotMulti {
+					c.cmds = append(c.cmds, sline)
+				}
+				fmt.Println("CMD: ", sline, getDovecotStatus(c.dovecotStatus))
+			}
+		case CmdParam:
+		default:
 		}
 	}
+
+	return nil
+}
+
+func (c *Conn) handleConn() error {
+	log.Println("New Connection: ", c.conn.RemoteAddr())
+	start := time.Now()
+	startMsg := fmt.Sprintf("%v: Started %v", start, c.conn.RemoteAddr())
+
+	for {
+		err := c.parser()
+		fmt.Println("Buffered: ", c.cBuf.Writer.Buffered())
+		switch c.dovecotStatus {
+		case DovecotGet:
+			c.cBuf.Write([]byte("$1\r\n10\r\n"))
+			c.cBuf.Flush()
+			fmt.Println("Write $1")
+			c.dovecotStatus = DovecotWait
+		case DovecotMulti:
+			c.cBuf.Write([]byte("+OK\r\n"))
+			c.cBuf.Flush()
+			fmt.Println("Write +OK")
+		case DovecotExec:
+			c.cBuf.Write([]byte(""))
+			c.cBuf.Flush()
+			fmt.Println("Write nil: ", c.cmds)
+			c.dovecotStatus = DovecotExecReply
+		case DovecotExecReply:
+			c.dovecotStatus = DovecotWait
+		default:
+			fmt.Println("Default dovectoStatus")
+			c.dovecotStatus = DovecotWait
+		}
+
+		if err != nil {
+			fmt.Println("Error: ", err)
+			break
+		}
+	}
+
+	fmt.Println("Cmds: ", c.cmds)
+	log.Printf("%s - executed cmds in %v\n\n", startMsg, time.Since(start))
 
 	return nil
 }
