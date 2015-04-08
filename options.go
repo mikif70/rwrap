@@ -13,8 +13,6 @@ var (
 		logfile:    "",
 		debug:      false,
 	}
-
-//	state = &State{}
 )
 
 func configure() {

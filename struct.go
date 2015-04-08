@@ -18,14 +18,14 @@ type Config struct {
 type Conn struct {
 	conn          *net.TCPConn
 	cBuf          *bufio.ReadWriter
-	cmds          []string
+	cmds          []Request
 	dovecotStatus Status
 	cmdStatus     Status
 }
 
-type Cmd struct {
-	cmd   string
-	param []string
+type Request struct {
+	cmd   []byte
+	param [][]byte
 }
 
 type Status int

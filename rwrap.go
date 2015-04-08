@@ -53,7 +53,7 @@ func main() {
 			c := Conn{
 				conn:          conn,
 				cBuf:          bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
-				cmds:          make([]string, 0),
+				cmds:          make([]Request, 0),
 				dovecotStatus: DovecotWait,
 				cmdStatus:     CmdCmd,
 			}
