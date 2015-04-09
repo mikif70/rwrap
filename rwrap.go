@@ -23,7 +23,7 @@ func main() {
 
 	configure()
 
-	//	config.ssdbAddr, _ = net.ResolveTCPAddr("tcp", config.ssdbUrl)
+	config.ssdbAddr, _ = net.ResolveTCPAddr("tcp", config.ssdbUrl)
 	config.wrapAddr, _ = net.ResolveTCPAddr("tcp", config.wrapUrl)
 
 	if config.cpuprofile != "" {
@@ -51,11 +51,11 @@ func main() {
 			}
 
 			c := Conn{
-				conn:          conn,
-				cBuf:          bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
-				cmds:          make([]Request, 0),
-				dovecotStatus: DovecotWait,
-				cmdStatus:     CmdCmd,
+				conn: conn,
+				//				ssdb:          ssdb,
+				cBuf: bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn)),
+				//				sBuf:          bufio.NewReadWriter(bufio.NewReader(ssdb), bufio.NewWriter(ssdb)),
+				cmds: make([]Request, 0),
 			}
 
 			go c.handleConn()

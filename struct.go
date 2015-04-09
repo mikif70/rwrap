@@ -12,20 +12,21 @@ type Config struct {
 	cpuprofile string
 	logfile    string
 	debug      bool
-	//	ssdbConn *net.TCPConn
+	ssdbAddr   *net.TCPAddr
+	ssdbUrl    string
 }
 
 type Conn struct {
-	conn          *net.TCPConn
-	cBuf          *bufio.ReadWriter
-	cmds          []Request
-	dovecotStatus Status
-	cmdStatus     Status
+	conn *net.TCPConn
+	ssdb *net.TCPConn
+	cBuf *bufio.ReadWriter
+	sBuf *bufio.ReadWriter
+	cmds []Request
 }
 
 type Request struct {
-	cmd   []byte
-	param [][]byte
+	cmd   string
+	param []string
 }
 
 type Status int
@@ -37,16 +38,6 @@ const (
 	CmdColon                // :
 	CmdCmd                  // cmd
 	CmdParam                // params
-)
-
-const (
-	DovecotWait      Status = iota //waiting CMD
-	DovecotSelect                  //expecting +OK reply for SELECT
-	DovecotGet                     //expecting $-1 / $<size> followed by GET reply
-	DovecotMulti                   //expecting +QUEUED
-	DovecotDiscard                 //expecting +OK reply for DISCARD
-	DovecotExec                    //expecting *<nreplies>
-	DovecotExecReply               //expecting EXEC reply
 )
 
 func getCmdStatus(status Status) string {
@@ -61,27 +52,6 @@ func getCmdStatus(status Status) string {
 		return ":"
 	case CmdCmd:
 		return "_"
-	}
-
-	return ""
-}
-
-func getDovecotStatus(status Status) string {
-	switch status {
-	case DovecotWait:
-		return "WAIT"
-	case DovecotSelect:
-		return "SELECT"
-	case DovecotGet:
-		return "GET"
-	case DovecotMulti:
-		return "MULTI"
-	case DovecotDiscard:
-		return "DISCARD"
-	case DovecotExec:
-		return "EXEC"
-	case DovecotExecReply:
-		return "EXEC_REPLY"
 	}
 
 	return ""

@@ -31,7 +31,7 @@ type Bench struct {
 var (
 	_DOVEADM = "/usr/bin/doveadm"
 	_USERS   = []string{"miki", "mfadda", "user1", "user2", "test1", "test2"}
-	_OPTS    = []string{"-v", "quota"} // , "get", "-u"}
+	_OPTS    = []string{"quota"} // , "get", "-u"}
 	config   = &Config{
 		repeat: 100,
 		sleep:  10 * time.Nanosecond * 1000000,
