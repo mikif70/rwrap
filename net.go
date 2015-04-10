@@ -7,8 +7,8 @@ import (
 )
 
 func listen() *net.TCPListener {
-	log.Printf("Listen: %+v\n", config.wrapAddr)
-	ln, err := net.ListenTCP("tcp", config.wrapAddr)
+	log.Printf("Listen: %+v\n", cfg.wrapAddr)
+	ln, err := net.ListenTCP("tcp", cfg.wrapAddr)
 	if err != nil {
 		log.Fatalln("Listen err: ", err.Error())
 	}
@@ -17,7 +17,7 @@ func listen() *net.TCPListener {
 }
 
 func ssdbConnect(count int) (*net.TCPConn, error) {
-	ssdb, err := net.DialTCP("tcp", nil, config.ssdbAddr)
+	ssdb, err := net.DialTCP("tcp", nil, cfg.ssdbAddr)
 	if err != nil {
 		log.Println("Dial err: ", err.Error())
 		if count > 1 {
@@ -27,7 +27,5 @@ func ssdbConnect(count int) (*net.TCPConn, error) {
 			return nil, err
 		}
 	}
-	//	ssdb.SetDeadline(time.Now().Add(time.Nanosecond * 200000000))
-	//	config.ssdbConn = ssdb
 	return ssdb, nil
 }

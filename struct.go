@@ -1,33 +1,7 @@
 // struct
 package main
 
-import (
-	"bufio"
-	"net"
-)
-
-type Config struct {
-	wrapUrl    string
-	wrapAddr   *net.TCPAddr
-	cpuprofile string
-	logfile    string
-	debug      bool
-	ssdbAddr   *net.TCPAddr
-	ssdbUrl    string
-}
-
-type Conn struct {
-	conn *net.TCPConn
-	ssdb *net.TCPConn
-	cBuf *bufio.ReadWriter
-	sBuf *bufio.ReadWriter
-	cmds []Request
-}
-
-type Request struct {
-	cmd   string
-	param []string
-}
+import ()
 
 type Status int
 

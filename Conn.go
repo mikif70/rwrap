@@ -6,10 +6,24 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"strconv"
 	"strings"
 	"time"
 )
+
+type Conn struct {
+	conn *net.TCPConn
+	ssdb *net.TCPConn
+	cBuf *bufio.ReadWriter
+	sBuf *bufio.ReadWriter
+	cmds []Request
+}
+
+type Request struct {
+	cmd   string
+	param []string
+}
 
 func (c *Conn) readLine() ([]byte, error) {
 
@@ -108,9 +122,8 @@ func (c *Conn) makeReply(cmd string, buf string) string {
 		return "$" + strconv.Itoa(len(list[l-1])) + "\r\n" + list[l-1] + "\r\n"
 	case "set":
 		return "+OK\r\n"
-	case "del":
+	case "del", "incrby":
 		return ":" + list[l-1] + "\r\n"
-	case "incrby":
 	}
 
 	return ""
@@ -123,13 +136,19 @@ func (c *Conn) exec() (string, error) {
 	//	fmt.Println("EXEC:")
 	for i := range c.cmds {
 		var reply string
+		var cmd string
 		//		fmt.Printf("%s ", string(c.cmds[i].cmd))
-		reply += strconv.Itoa(len(c.cmds[i].cmd)) + "\n" + string(c.cmds[i].cmd) + "\n"
+		if c.cmds[i].cmd == "incrby" {
+			cmd = "incr"
+		} else {
+			cmd = c.cmds[i].cmd
+		}
+		reply += strconv.Itoa(len(cmd)) + "\n" + string(cmd) + "\n"
 		for p := range c.cmds[i].param {
 			//			fmt.Printf("%s ", string(c.cmds[i].param[p]))
 			reply += strconv.Itoa(len(c.cmds[i].param[p])) + "\n" + string(c.cmds[i].param[p]) + "\n"
 		}
-		//		fmt.Println(reply)
+		//		fmt.Println("Reply: ", reply)
 		c.sBuf.WriteString(reply + "\n")
 		c.sBuf.Flush()
 		buf := make([]byte, 1024)
@@ -141,7 +160,7 @@ func (c *Conn) exec() (string, error) {
 		retval += c.makeReply(c.cmds[i].cmd, string(buf[:n]))
 	}
 
-	//	fmt.Println(retval)
+	//	fmt.Println("Retval: ", retval)
 
 	return retval, nil
 }
