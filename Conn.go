@@ -13,11 +13,12 @@ import (
 )
 
 type Conn struct {
-	conn *net.TCPConn
-	ssdb *net.TCPConn
-	cBuf *bufio.ReadWriter
-	sBuf *bufio.ReadWriter
-	cmds []Request
+	conn  *net.TCPConn
+	ssdb  *net.TCPConn
+	cBuf  *bufio.ReadWriter
+	sBuf  *bufio.ReadWriter
+	cmds  []Request
+	multi bool
 }
 
 type Request struct {
@@ -86,7 +87,7 @@ func (c *Conn) parser() (*Request, error) {
 		scmd := strings.ToLower(string(cmd))
 
 		switch scmd {
-		case "multi", "exec":
+		case "multi", "exec", "ping":
 			return &Request{cmd: scmd}, nil
 		default:
 			params := make([]string, num-1)
@@ -148,7 +149,7 @@ func (c *Conn) exec() (string, error) {
 			//			fmt.Printf("%s ", string(c.cmds[i].param[p]))
 			reply += strconv.Itoa(len(c.cmds[i].param[p])) + "\n" + string(c.cmds[i].param[p]) + "\n"
 		}
-		//		fmt.Println("Reply: ", reply)
+		fmt.Println("Send cmd: ", reply)
 		c.sBuf.WriteString(reply + "\n")
 		c.sBuf.Flush()
 		buf := make([]byte, 1024)
@@ -156,11 +157,11 @@ func (c *Conn) exec() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		//		fmt.Println(string(buf[:n]))
+		fmt.Println("cmd response: ", string(buf[:n]))
 		retval += c.makeReply(c.cmds[i].cmd, string(buf[:n]))
 	}
 
-	//	fmt.Println("Retval: ", retval)
+	//fmt.Println("Retval: ", retval)
 
 	return retval, nil
 }
@@ -180,7 +181,7 @@ func (c *Conn) reply(reply string, multi bool) error {
 		retval += "*" + strconv.Itoa(l-1) + "\r\n"
 	}
 
-	//	fmt.Println("Retval: ", retval+reply)
+	fmt.Println("Retval: ", retval+reply)
 	c.cBuf.WriteString(retval + reply)
 	c.cBuf.Flush()
 	return nil
@@ -214,21 +215,29 @@ func (c *Conn) handleConn() error {
 		}
 		//		fmt.Println("Buffered: ", request)
 		switch string(request.cmd) {
-		case "get":
-			c.cmds = append(c.cmds, *request)
-			reply, err := c.exec()
-			if err != nil {
-				fmt.Println("Exec error: ", err.Error())
-				continue
+		case "get", "set", "incr":
+			if !c.multi {
+				c.cmds = append(c.cmds, *request)
+				reply, err := c.exec()
+				if err != nil {
+					fmt.Println("Exec error: ", err.Error())
+					continue
+				}
+				fmt.Println("Request: ", request)
+				fmt.Println("Reply: ", reply)
+				c.reply(reply, false)
+				c.cmds = make([]Request, 0)
+			} else {
+				fmt.Println("Default dovectoStatus: ", *request)
+				c.cmds = append(c.cmds, *request)
 			}
-			//			fmt.Println("Reply: ", reply)
-			c.reply(reply, false)
-			c.cmds = make([]Request, 0)
 		case "multi":
 			c.cBuf.Write([]byte("+OK\r\n"))
 			c.cBuf.Flush()
+			c.multi = true
 			//			fmt.Println("Write +OK")
 		case "exec":
+			c.multi = false
 			reply, err := c.exec()
 			if err != nil {
 				fmt.Println("Exec error: ", err.Error())
@@ -237,6 +246,9 @@ func (c *Conn) handleConn() error {
 			//			fmt.Println("Reply: ", reply)
 			c.reply(reply, true)
 			c.cmds = make([]Request, 0)
+		case "ping":
+			c.cBuf.Write([]byte("+PONG\r\n"))
+			c.cBuf.Flush()
 		default:
 			fmt.Println("Default dovectoStatus: ", *request)
 			c.cmds = append(c.cmds, *request)
