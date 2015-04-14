@@ -11,15 +11,21 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	//"time"
 )
 
 func main() {
 
 	configure()
+
+	if cfg.logfile != nil {
+		defer cfg.logfile.Close()
+	}
 
 	cfg.ssdbAddr, _ = net.ResolveTCPAddr("tcp", cfg.ssdbUrl)
 	cfg.wrapAddr, _ = net.ResolveTCPAddr("tcp", cfg.wrapUrl)
@@ -32,9 +38,10 @@ func main() {
 
 	go func(ln *net.TCPListener) {
 		for {
+			//			ln.SetDeadline(time.Now().Add(time.Nanosecond * cfg.deadLine))
 			conn, err := ln.AcceptTCP()
 			if err != nil {
-				cfg.log.Println("Accept err: ", err.Error())
+				log.Println("Accept err: ", err.Error())
 				continue
 			}
 
@@ -49,7 +56,7 @@ func main() {
 	}(ln)
 
 	for sig := range sigchan {
-		fmt.Println("Signal: ", sig)
+		fmt.Printf("\nSignal: %+v\n", sig)
 		break
 	}
 }
