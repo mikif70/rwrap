@@ -2,28 +2,38 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net"
+	"runtime"
 )
+
+func getFuncName() string {
+	a, _, c, _ := runtime.Caller(2)
+	e := runtime.FuncForPC(a).Name()
+
+	name := fmt.Sprintf("%s[%d]: ", e, c)
+
+	return name
+}
 
 func printLog(str string, inf ...interface{}) {
 
-	log.Printf(str, inf...)
+	log.Printf(getFuncName()+str, inf...)
 
 }
 
 func debugLog(str string, inf ...interface{}) {
 
 	if cfg.debug {
-		log.Printf(str, inf...)
+		log.Printf(getFuncName()+str, inf...)
 	}
 
 }
 
 func errorLog(str string, inf ...interface{}) {
 
-	log.Printf(str, inf...)
-
+	log.Printf(getFuncName()+str, inf...)
 }
 
 func listen() *net.TCPListener {

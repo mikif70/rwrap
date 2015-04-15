@@ -183,7 +183,7 @@ func (c *Conn) handleConn() error {
 	debugLog("Connecting SSDB....")
 	c.ssdb, err = ssdbConnect(3)
 	if err != nil {
-		errorLog("SSDB err: ", err.Error())
+		errorLog("SSDB err: %s\n", err.Error())
 		return err
 	}
 
@@ -199,7 +199,7 @@ func (c *Conn) handleConn() error {
 		request, err := c.parser()
 		if err != nil {
 			if err.Error() != "EOF" {
-				errorLog("Parser error: ", err)
+				errorLog("Parser error: %s\n", err)
 			}
 			break
 		}
@@ -209,8 +209,8 @@ func (c *Conn) handleConn() error {
 				c.cmds = append(c.cmds, *request)
 				reply, err := c.exec()
 				if err != nil {
-					errorLog("Exec error: ", err.Error())
-					continue
+					errorLog("GET/SET/INCR error: %s\n", err.Error())
+					return nil
 				}
 				debugLog("Request: %+v\n", *request)
 				debugLog("Reply: %q\n", reply)
@@ -228,8 +228,8 @@ func (c *Conn) handleConn() error {
 			c.multi = false
 			reply, err := c.exec()
 			if err != nil {
-				errorLog("Exec error: ", err.Error())
-				continue
+				errorLog("Exec error: %s\n", err.Error())
+				return nil
 			}
 			c.reply(reply, true)
 			c.cmds = make([]Request, 0)
@@ -241,10 +241,10 @@ func (c *Conn) handleConn() error {
 			c.cmds = append(c.cmds, *request)
 		}
 
-		if err != nil {
-			errorLog("Error: ", err)
-			break
-		}
+		//		if err != nil {
+		//			errorLog("Error: %s\n", err.Error())
+		//			break
+		//		}
 	}
 
 	printLog("%s - executed cmds in %v [%v]\n", startMsg, time.Since(start), c.conn)

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -43,7 +44,11 @@ func configure() {
 	var err error
 
 	if cfg.logfname != "" {
-		cfg.logfile, err = os.OpenFile(cfg.logfname, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if _, err := os.Stat(cfg.logfname); err == nil {
+			newname := cfg.logfname + "." + strconv.FormatInt(time.Now().Unix(), 10)
+			os.Rename(cfg.logfname, newname)
+		}
+		cfg.logfile, err = os.OpenFile(cfg.logfname, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 		if err != nil {
 			log.Fatalln("Error opening log file: ", err.Error())
 		}
@@ -51,7 +56,7 @@ func configure() {
 	}
 
 	if cfg.debug {
-		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
+		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 	} else {
 		log.SetFlags(log.Ldate | log.Ltime)
 	}
